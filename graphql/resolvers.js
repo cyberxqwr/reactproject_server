@@ -1,16 +1,12 @@
-// Importuojame reikalingus modulius
-const bcrypt = require('bcryptjs');             // Slaptažodžių hash'inimui ir palyginimui
-const jwt = require('jsonwebtoken');            // JWT kūrimui
-const { AuthenticationError, UserInputError } = require('apollo-server-express'); // Apollo klaidų tipai
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { AuthenticationError, UserInputError } = require('apollo-server-express');
 
-// Importuojame DB prisijungimų telkinį (pool)
-const pool = require('../config/db'); // Koreguokite kelią pagal savo struktūrą
+const pool = require('../config/db');
 
-// Pagrindinis resolverių objektas (struktūra turi atitikti typeDefs)
 const resolvers = {
-  // --- Query Resolveriai ---
+
   Query: {
-    // Resolveris 'items' užklausai
     items: async () => {
       try {
         console.log("Fetching items from DB...");
@@ -23,7 +19,64 @@ const resolvers = {
       }
     },
 
-    // Resolveris 'item' užklausai (gauna 'id' per antrą argumentą 'args')
+    blogs: async () => {
+
+      const [rows] = await pool.execute('SELECT * FROM blogs ORDER BY createdon DESC');
+
+      const formattedRows = rows.map(blog => {
+
+        const formattedBlog = { ...blog };
+
+
+        if (formattedBlog.createdon && typeof formattedBlog.createdon.toISOString === 'function') {
+
+          formattedBlog.createdon = formattedBlog.createdon.toISOString();
+        } else if (formattedBlog.createdon) {
+
+          formattedBlog.createdon = String(formattedBlog.createdon);
+        } else {
+
+          formattedBlog.createdon = null;
+        }
+
+        return formattedBlog;
+      });
+
+      return formattedRows;
+    },
+
+    blogsUser: async (_, __, context) => {
+
+      if (!context.user) {
+        throw new AuthenticationError('Veiksmas leidžiamas tik prisijungusiems vartotojams.');
+      }
+
+        const [rows] = await pool.execute('SELECT * FROM blogs WHERE createdby = ? ORDER BY createdon DESC', [context.user.userId]);
+
+        const formattedRows = rows.map(blog => {
+
+          const formattedBlog = { ...blog };
+  
+  
+          if (formattedBlog.createdon && typeof formattedBlog.createdon.toISOString === 'function') {
+  
+            formattedBlog.createdon = formattedBlog.createdon.toISOString();
+          } else if (formattedBlog.createdon) {
+  
+            formattedBlog.createdon = String(formattedBlog.createdon);
+          } else {
+  
+            formattedBlog.createdon = null;
+          }
+  
+          return formattedBlog;
+        });
+  
+        console.log("Data being returned by Query.blogs resolver (checking imagepath):", JSON.stringify(formattedRows.slice(0, 2), null, 2));
+        
+        return formattedRows;
+    },
+
     item: async (_, { id }) => {
       try {
         console.log(`Workspaceing item with id: ${id}`);
@@ -40,23 +93,27 @@ const resolvers = {
       }
     },
 
-    // Resolveris 'currentUser' užklausai (gauna 'context' per trečią argumentą)
+    
     currentUser: async (_, __, context) => {
       // 'context.user' yra objektas, kurį pridėjome server.js konfigūracijoje iš JWT
       console.log("currentUser context.user:", context.user);
-      if (!context.user) {
-        // Jei context.user nėra, vartotojas neprisijungęs arba tokenas blogas
+      if (!context.user || context.user.userId === undefined || context.user.userId === null) {
+        console.log("currentUser resolver: No valid user in context. Returning null.");
         return null;
       }
       // TODO: Galima papildomai patikrinti DB, ar vartotojas su context.user.id vis dar egzistuoja
       // Grąžiname vartotojo duomenis iš konteksto
-      return {
-          id: context.user.id, // Svarbu: įsitikinkite, kad jūsų JWT payload yra 'id'
-          email: context.user.email, // Svarbu: įsitikinkite, kad jūsų JWT payload yra 'email'
-          name: context.user.name,
-          surname: context.user.surname
-          // Pridėkite kitus laukus, jei reikia ir jei jie yra JWT payload'e
+      console.log(`currentUser resolver: Returning user data for ID: ${context.user.userId}`);
+      const userToReturn = {
+        // PAKEISTA ČIA: Naudojame context.user.userId
+        id: context.user.userId,
+        email: context.user.email,
+        // PAKEISTA ČIA: Naudojame || null, kad grąžintų null, jei JWT nėra vardo/pavardės
+        name: context.user.name || null,
+        surname: context.user.surname || null
       };
+
+      return userToReturn;
     }
   },
 
@@ -65,49 +122,41 @@ const resolvers = {
     // Resolveris 'register' mutacijai
     register: async (_, { email, password, name, surname }) => {
       try {
-        // TODO: Patikrinti, ar vartotojas su tokiu el. paštu jau egzistuoja DB
-        // const [existingUser] = await pool.execute('SELECT id FROM users WHERE email = ?', [email]);
-        // if (existingUser.length > 0) {
-        //   throw new UserInputError('Vartotojas su tokiu el. paštu jau egzistuoja.');
-        // }
 
-        // Hash'uojame slaptažodį (saugumui!)
         const hashedPassword = await bcrypt.hash(password, 12); // 12 - salt rounds
 
-        // Įrašome naują vartotoją į DB
         const [result] = await pool.execute(
-          'INSERT INTO users (email, password, name, surname) VALUES (?, ?, ?, ?)', // TODO: Pakeiskite lentelės pavadinimą ir stulpelius
+          'INSERT INTO users (email, password, name, surname) VALUES (?, ?, ?, ?)',
           [email, hashedPassword, name || "", surname || ""]
         );
 
         const userId = result.insertId;
         if (!userId) {
-            throw new Error('Nepavyko įterpti vartotojo į DB.');
+          throw new Error('Nepavyko įterpti vartotojo į DB.');
         }
 
-        // Sukuriame JWT tokeną
         const token = jwt.sign(
-          { userId: userId, email: email }, // Payload - kokią info užkoduoti į tokeną
-          process.env.JWT_SECRET,         // Paslaptis iš .env failo
-          { expiresIn: '1h' }             // Tokeno galiojimo laikas (pvz., 1 valanda)
+          { userId: userId, email: email },
+          process.env.JWT_SECRET,
+          { expiresIn: '1h' }
         );
 
         console.log(`User registered: ${email}, ID: ${userId}`);
-        // Grąžiname tokeną ir vartotojo info (atitinka AuthPayload tipą schemoje)
+        
         return {
           token,
-          user: { id: userId, email: email }
+          user: { id: userId, email: email, name: name, surname: surname }
         };
       } catch (error) {
         console.error('Registration error:', error);
-        // Perduodame klaidą toliau, kad Apollo Server ją apdorotų
-        throw error; // Arba grąžiname specifiškesnę klaidą
+        
+        throw error;
       }
     },
 
     // Resolveris 'login' mutacijai
     login: async (_, { email, password }) => {
-       try {
+      try {
         // Ieškome vartotojo pagal el. paštą
         const [users] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]); // TODO: Pakeiskite lentelės pavadinimą
 
@@ -139,17 +188,54 @@ const resolvers = {
           token,
           user: { id: user.id, email: user.email }
         };
-       } catch (error) {
-           console.error('Login error:', error);
-           // Jei tai ne AuthenticationError, perduodam bendrą klaidą
-           if (!(error instanceof AuthenticationError)) {
-               throw new Error('Prisijungimo klaida.');
-           }
-           throw error; // Perduodam AuthenticationError toliau
-       }
+      } catch (error) {
+        console.error('Login error:', error);
+        // Jei tai ne AuthenticationError, perduodam bendrą klaidą
+        if (!(error instanceof AuthenticationError)) {
+          throw new Error('Prisijungimo klaida.');
+        }
+        throw error; // Perduodam AuthenticationError toliau
+      }
     },
 
     // --- CRUD Mutacijos (Reikalinga Autentifikacija) ---
+
+
+    createBlog: async (_, { name, desc, imagepath }, context) => {
+
+      console.log("Using v2");
+
+      if (!context.user) {
+        throw new AuthenticationError('Veiksmas leidžiamas tik prisijungusiems vartotojams.');
+      }
+
+      const createdDate = new Date();
+      const userId = context.user.userId;
+
+      try {
+
+        const [result] = await pool.execute(
+          'INSERT INTO blogs (name, `desc`, createdby, imagepath, createdon) VALUES (?, ?, ?, ?, ?)',
+          [name, desc, userId, imagepath, createdDate]
+        )
+
+
+
+        const newBlogId = result.insertId;
+        console.log("id: ", newBlogId);
+
+        console.log(`DB Insert successful. New Blog ID: ${newBlogId}`);
+
+        if (!newBlogId) {
+          throw new Error('Nepavyko gauti naujo įrašo ID iš DB po INSERT.');
+        }
+
+        return { id: newBlogId, name, desc, createdby: userId, imagepath, createdon: createdDate }
+      } catch (error) {
+        console.error("Error: ", error);
+      }
+
+    },
 
     // Resolveris 'createItem' mutacijai
     createItem: async (_, { name, description }, context) => {
@@ -163,8 +249,8 @@ const resolvers = {
         console.log(`User ${context.user.userId} creating item: ${name}`);
         // TODO: Jei 'items' lentelė turi 'user_id' stulpelį, naudokite context.user.userId
         const [result] = await pool.execute(
-            'INSERT INTO items (name, description /*, user_id */) VALUES (?, ? /*, ? */)', // TODO: Pakeiskite lentelę/stulpelius
-            [name, description || null /*, context.user.userId */]
+          'INSERT INTO items (name, description /*, user_id */) VALUES (?, ? /*, ? */)', // TODO: Pakeiskite lentelę/stulpelius
+          [name, description || null /*, context.user.userId */]
         );
 
         const newItemId = result.insertId;
@@ -181,62 +267,74 @@ const resolvers = {
 
     // Resolveris 'updateItem' mutacijai
     updateItem: async (_, { id, name, description }, context) => {
-        if (!context.user) {
-            throw new AuthenticationError('Veiksmas leidžiamas tik prisijungusiems vartotojams.');
+      if (!context.user) {
+        throw new AuthenticationError('Veiksmas leidžiamas tik prisijungusiems vartotojams.');
+      }
+      try {
+        console.log(`User ${context.user.userId} updating item ID: ${id}`);
+        // TODO: Patikrinti, ar vartotojas turi teisę redaguoti BŪTENT šį įrašą (jei yra user_id)
+        // TODO: Sukonstruoti UPDATE užklausą dinamiškai, kad atnaujintų tik pateiktus laukus (name, description)
+
+        // Paprastas pavyzdys, atnaujinantis abu laukus:
+        const [result] = await pool.execute(
+          'UPDATE items SET name = ?, description = ? WHERE id = ? /* AND user_id = ? */', // TODO: Pakeiskite lentelę/stulpelius
+          [name, description || null, id /*, context.user.userId */]
+        );
+
+        if (result.affectedRows === 0) {
+          console.log(`Item ID ${id} not found or not owned by user ${context.user.userId}.`);
+          return null; // Arba mesti klaidą 'NotFound'
         }
-        try {
-            console.log(`User ${context.user.userId} updating item ID: ${id}`);
-            // TODO: Patikrinti, ar vartotojas turi teisę redaguoti BŪTENT šį įrašą (jei yra user_id)
-            // TODO: Sukonstruoti UPDATE užklausą dinamiškai, kad atnaujintų tik pateiktus laukus (name, description)
 
-            // Paprastas pavyzdys, atnaujinantis abu laukus:
-            const [result] = await pool.execute(
-                'UPDATE items SET name = ?, description = ? WHERE id = ? /* AND user_id = ? */', // TODO: Pakeiskite lentelę/stulpelius
-                [name, description || null, id /*, context.user.userId */]
-            );
+        console.log(`Item ID ${id} updated.`);
+        // Grąžiname atnaujinto įrašo duomenis (galima pakartotinai užklausti DB arba tiesiog grąžinti pateiktus duomenis)
+        return { id, name, description /*, userId: context.user.userId */ };
 
-            if (result.affectedRows === 0) {
-                console.log(`Item ID ${id} not found or not owned by user ${context.user.userId}.`);
-                return null; // Arba mesti klaidą 'NotFound'
-            }
-
-             console.log(`Item ID ${id} updated.`);
-             // Grąžiname atnaujinto įrašo duomenis (galima pakartotinai užklausti DB arba tiesiog grąžinti pateiktus duomenis)
-             return { id, name, description /*, userId: context.user.userId */ };
-
-        } catch (error) {
-             console.error(`Error updating item ${id}:`, error);
-             throw new Error('Nepavyko atnaujinti įrašo.');
-        }
+      } catch (error) {
+        console.error(`Error updating item ${id}:`, error);
+        throw new Error('Nepavyko atnaujinti įrašo.');
+      }
     },
 
     // Resolveris 'deleteItem' mutacijai
     deleteItem: async (_, { id }, context) => {
-        if (!context.user) {
-            throw new AuthenticationError('Veiksmas leidžiamas tik prisijungusiems vartotojams.');
+      if (!context.user) {
+        throw new AuthenticationError('Veiksmas leidžiamas tik prisijungusiems vartotojams.');
+      }
+      try {
+        console.log(`User ${context.user.userId} deleting item ID: ${id}`);
+        // TODO: Patikrinti, ar vartotojas turi teisę trinti BŪTENT šį įrašą (jei yra user_id)
+        const [result] = await pool.execute(
+          'DELETE FROM items WHERE id = ? /* AND user_id = ? */', // TODO: Pakeiskite lentelę/stulpelius
+          [id /*, context.user.userId */]
+        );
+
+        if (result.affectedRows === 0) {
+          console.log(`Item ID ${id} not found or not owned by user ${context.user.userId} for deletion.`);
+          return false; // Nepavyko ištrinti (nerado arba neturėjo teisių)
         }
-         try {
-             console.log(`User ${context.user.userId} deleting item ID: ${id}`);
-             // TODO: Patikrinti, ar vartotojas turi teisę trinti BŪTENT šį įrašą (jei yra user_id)
-             const [result] = await pool.execute(
-                 'DELETE FROM items WHERE id = ? /* AND user_id = ? */', // TODO: Pakeiskite lentelę/stulpelius
-                 [id /*, context.user.userId */]
-             );
 
-             if (result.affectedRows === 0) {
-                 console.log(`Item ID ${id} not found or not owned by user ${context.user.userId} for deletion.`);
-                 return false; // Nepavyko ištrinti (nerado arba neturėjo teisių)
-             }
+        console.log(`Item ID ${id} deleted.`);
+        return true; // Sėkmingai ištrinta
 
-             console.log(`Item ID ${id} deleted.`);
-             return true; // Sėkmingai ištrinta
-
-         } catch (error) {
-             console.error(`Error deleting item ${id}:`, error);
-             throw new Error('Nepavyko ištrinti įrašo.');
-         }
+      } catch (error) {
+        console.error(`Error deleting item ${id}:`, error);
+        throw new Error('Nepavyko ištrinti įrašo.');
+      }
     },
   },
+
+  Blog: {
+    imageUrl: (parent) => {
+      if (parent.imagepath) {
+
+          const constructedUrl = `http://localhost:3001${parent.imagepath}`;
+          return constructedUrl;
+        
+      }
+      return null;
+    }
+  }
 
   // --- Kiti Resolveriai (jei reikia, pvz., ryšiams tarp tipų) ---
   // Pvz., jei Item tipas turėtų 'user' lauką:

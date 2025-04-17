@@ -1,13 +1,16 @@
-// 1. Užkrauname aplinkos kintamuosius iš .env failo
+
 require('dotenv').config();
 
-// 2. Importuojame reikalingus modulius
 const express = require('express');
 const { ApolloServer } = require('apollo-server-express'); // Pagrindinis Apollo serveris integracijai su Express
 const cors = require('cors');                           // Leidžia užklausas iš kito domeno (jūsų frontend)
 const jwt = require('jsonwebtoken');                    // JWT validavimui
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
-// 3. Importuojame savo GraphQL schemą ir resolverius
+
+
 const typeDefs = require('./graphql/typeDefs'); // Įsitikinkite, kad kelias teisingas
 const resolvers = require('./graphql/resolvers'); // Įsitikinkite, kad kelias teisingas
 
@@ -18,75 +21,97 @@ const PORT = process.env.PORT || 3001;
 const getUserFromToken = (token) => {
     if (token) {
         try {
-            // Patikriname (verify) tokeną naudodami paslaptį iš .env failo
-            // Jei tokenas validus ir nepasibaigęs, grąžins iššifruotus duomenis (payload)
+
             return jwt.verify(token, process.env.JWT_SECRET);
         } catch (err) {
-            // Klaida reiškia, kad tokenas nebegalioja arba yra neteisingas
             console.error('Invalid or expired token:', err.message);
             return null;
         }
     }
-    // Jei tokeno nėra, vartotojas neautentifikuotas
+
     return null;
 };
 
-
-// 6. Asinchroninė funkcija serveriui paleisti (reikalinga dėl await server.start())
 async function startApolloServer() {
-    // 7. Sukuriame Express aplikaciją
+
     const app = express();
 
-    // 8. Įjungiame CORS visiems maršrutams
-    // Gamybinėje aplinkoje reikėtų konfigūruoti detaliau, nurodant tik leistinus domenus
     app.use(cors());
 
-    // 9. Sukuriame ApolloServer instanciją
+    const blogUploadsDir = path.join(__dirname, 'uploads', 'blogs');
+
+    if (!fs.existsSync(blogUploadsDir)) fs.mkdirSync(blogUploadsDir, { recursive: true });
+
+    const storage = multer.diskStorage({
+        destination: function (req, file, cb) {
+            cb(null, blogUploadsDir)
+        },
+        filename: function (req, file, cb) {
+            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+            cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+
+        }
+    });
+
+    const upload = multer({ storage: storage });
+
+    app.post('/api/upload/blog-image', upload.single('blogImage'), (req, res) => {
+
+        if (!req.file) {
+            return res.status(400).json({ error: 'Failas neikeltas' });
+
+        }
+
+        const filePath = `/uploads/blogs/${req.file.filename}`;
+        console.log("Failas ikeltas", filePath);
+        res.json({ filePath: filePath });
+    });
+
+    app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
     const server = new ApolloServer({
-        typeDefs,  // Mūsų GraphQL schema
-        resolvers, // Mūsų GraphQL resolveriai
-        // Context funkcija - jos rezultatas bus prieinamas KIEKVIENAME resolver'yje
-        // per trečiąjį argumentą (paprastai vadinamą 'context')
+        typeDefs,
+        resolvers,
         context: ({ req }) => {
-            // Gauname 'authorization' antraštę iš įeinančios HTTP užklausos
+
             const authHeader = req.headers.authorization || '';
-            // Išimame patį tokeną (tikimės formato 'Bearer <token>')
-            // Jei antraštė prasideda 'Bearer ', paimame dalį po tarpo
+
             const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
 
-            // Gauname vartotojo duomenis iš tokeno (arba null, jei tokeno nėra/neteisingas)
             const user = getUserFromToken(token);
 
-            // Grąžiname objektą, kuris taps 'context'.
-            // Dabar resolveriuose galėsime pasiekti prisijungusį vartotoją per 'context.user'
-            // Čia taip pat galima pridėti DB pool ar kitus dalykus, jei reikia juos pasiekti tiesiogiai resolveriuose
-            return { user /*, dbPool: pool */ }; // 'user' bus null, jei neprisijungęs/tokenas blogas
+            return { user };
         },
-        // Galima įjungti introspekciją ir playground'ą development aplinkoje
+
+        debug: true,
+        formatError: (err) => {
+            console.error("--- GraphQL Error Formatter ---");
+            console.error(JSON.stringify(err, null, 2));
+            console.error("--- End GraphQL Error ---");
+            return err;
+        },
+
         introspection: process.env.NODE_ENV !== 'production',
-        // playground: process.env.NODE_ENV !== 'production', // Senesnė versija, dabar Apollo Studio rekomenduojama
+
     });
 
-    // 10. BŪTINA: Paleidžiame Apollo serverį prieš integruojant su Express
+
     await server.start();
 
-    // 11. Integruojame Apollo Server kaip middleware į Express aplikaciją
-    // Visos užklausos į '/graphql' kelią bus nukreiptos į Apollo Server
     server.applyMiddleware({
-         app,               // Express aplikacija
-         path: '/graphql'   // Kelias (endpoint), kuriuo veiks GraphQL API
+        app,
+        path: '/graphql'
     });
 
-    // 12. Paleidžiame Express serverį klausytis nurodytu portu
+
     app.listen(PORT, () => {
-        console.log(`--------------------------------------------------------------------`);
-        console.log(`🚀 Backend serveris pasiruošęs adresu http://localhost:${PORT}`);
-        console.log(`🚀 GraphQL API veikia adresu http://localhost:${PORT}${server.graphqlPath}`);
-        console.log(`--------------------------------------------------------------------`);
+
+        console.log(`Backend serveris http://localhost:${PORT}`);
+        console.log(`GraphQL API http://localhost:${PORT}${server.graphqlPath}`);
+
     });
 }
 
-// 13. Iškviečiame asinchroninę funkciją serveriui paleisti
 startApolloServer().catch(error => {
     console.error("Klaida paleidžiant Apollo serverį:", error);
 });
