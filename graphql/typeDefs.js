@@ -1,12 +1,10 @@
-// Importuojame gql žymę iš apollo-server-express
 const { gql } = require('apollo-server-express');
 
-// Apibrėžiame GraphQL schemą
 const typeDefs = gql`
 
   type User {
-    id: ID!          # Unikalus vartotojo ID (dažniausiai iš DB)
-    email: String!   # Vartotojo el. paštas
+    id: ID!
+    email: String!
     name: String
     surname: String
   }
@@ -42,6 +40,8 @@ const typeDefs = gql`
 
     blogsUser: [Blog!]!
 
+    blogId(id: ID!): Blog
+
     # Gauti vieną įrašą pagal ID
     item(id: ID!): Item
 
@@ -56,9 +56,11 @@ const typeDefs = gql`
     login(email: String!, password: String!): AuthPayload!
 
     createItem(name: String!, description: String): Item!
-    updateItem(id: ID!, name: String, description: String): Item # Grąžina atnaujintą įrašą arba null
-    deleteItem(id: ID!): Boolean # Grąžina true, jei pavyko, false/null kitu atveju
+    updateItem(id: ID!, name: String, description: String): Item
+    deleteItem(id: ID!): Boolean
     createBlog(name: String!, desc: String!, imagepath: String): Blog!
+    updateBlog (id: ID!, name: String!, desc: String!, imagepath: String!): Blog!
+    deleteBlog(id: ID!): Boolean
   }
 `;
 

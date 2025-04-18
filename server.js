@@ -2,29 +2,27 @@
 require('dotenv').config();
 
 const express = require('express');
-const { ApolloServer } = require('apollo-server-express'); // Pagrindinis Apollo serveris integracijai su Express
-const cors = require('cors');                           // Leidžia užklausas iš kito domeno (jūsų frontend)
-const jwt = require('jsonwebtoken');                    // JWT validavimui
+const { ApolloServer } = require('apollo-server-express');
+const cors = require('cors');
+const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
 
 
-const typeDefs = require('./graphql/typeDefs'); // Įsitikinkite, kad kelias teisingas
-const resolvers = require('./graphql/resolvers'); // Įsitikinkite, kad kelias teisingas
+const typeDefs = require('./graphql/typeDefs');
+const resolvers = require('./graphql/resolvers');
 
-// 4. Nustatome serverio portą (iš .env arba numatytąjį)
 const PORT = process.env.PORT || 3001;
 
-// 5. Pagalbinė funkcija vartotojo duomenims iš JWT gauti
 const getUserFromToken = (token) => {
     if (token) {
         try {
 
             return jwt.verify(token, process.env.JWT_SECRET);
         } catch (err) {
-            console.error('Invalid or expired token:', err.message);
+            
             return null;
         }
     }
@@ -81,14 +79,6 @@ async function startApolloServer() {
             const user = getUserFromToken(token);
 
             return { user };
-        },
-
-        debug: true,
-        formatError: (err) => {
-            console.error("--- GraphQL Error Formatter ---");
-            console.error(JSON.stringify(err, null, 2));
-            console.error("--- End GraphQL Error ---");
-            return err;
         },
 
         introspection: process.env.NODE_ENV !== 'production',
